@@ -61,6 +61,16 @@ export function isOriginAllowed(origin) {
       if (!s) continue;
       if (host === s || host.endsWith(`.${s}`)) return true;
     }
+
+    /**
+     * Vercel production aliases use `https://<project>-<slug>.vercel.app` — they do NOT share the same
+     * hostname suffix as preview URLs (`*.team-hash.vercel.app`). Allow any `*.vercel.app` over HTTPS
+     * unless CLIENT_ORIGIN_STRICT=true (e.g. private API locked to CLIENT_ORIGIN / suffix list only).
+     */
+    const strictOnly = /^true$/i.test(process.env.CLIENT_ORIGIN_STRICT ?? "");
+    if (!strictOnly && protocol === "https:" && host.endsWith(".vercel.app")) {
+      return true;
+    }
   } catch {
     /* invalid URL */
   }

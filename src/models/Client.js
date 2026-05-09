@@ -1,0 +1,47 @@
+import mongoose from "mongoose";
+
+const communicationLogSchema = new mongoose.Schema(
+  {
+    at: { type: Date, required: true, default: Date.now },
+    message: { type: String, required: true }
+  },
+  { _id: true }
+);
+
+const clientProjectSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    status: {
+      type: String,
+      enum: ["Planning", "Active", "On Hold", "Completed"],
+      default: "Active"
+    },
+    description: { type: String, default: "" }
+  },
+  { timestamps: true }
+);
+
+const clientSchema = new mongoose.Schema(
+  {
+    company: { type: String, required: true },
+    contactPerson: { type: String, required: true },
+    email: { type: String, default: "" },
+    phone: { type: String, default: "" },
+    dealValue: { type: Number, default: 0 },
+    paymentStatus: {
+      type: String,
+      enum: ["Paid", "Pending"],
+      default: "Pending"
+    },
+    contractIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Document" }],
+    invoiceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Invoice" }],
+    paymentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Payment" }],
+    projects: [clientProjectSchema],
+    projectSummary: { type: String, default: "" },
+    supportStatus: { type: String, enum: ["Healthy", "At Risk"], default: "Healthy" },
+    communicationLogs: [communicationLogSchema]
+  },
+  { timestamps: true }
+);
+
+export const ClientModel = mongoose.model("Client", clientSchema);

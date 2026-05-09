@@ -13,6 +13,11 @@ const envSchema = z.object({
   REFRESH_TOKEN_TTL: z.string().default("30d"),
   /** Primary + extra allowed browser origins for CORS (comma-separated URLs, no trailing slash). */
   CLIENT_ORIGIN: z.string().default("http://localhost:3000"),
+  /**
+   * Extra CORS hosts: comma-separated suffixes without scheme, e.g. `akhilesh2006s-projects.vercel.app`
+   * matches `https://any-preview--xxx.akhilesh2006s-projects.vercel.app` so you don't list every preview URL.
+   */
+  CLIENT_ORIGIN_SUFFIXES: z.string().optional().default(""),
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
@@ -36,3 +41,28 @@ export const env = {
 export const clientOrigins = parsed.data.CLIENT_ORIGIN.split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+/** Hostname suffix match for Vercel team previews (`*.YOUR-team.vercel.app`). */
+export const clientOriginSuffixes = (parsed.data.CLIENT_ORIGIN_SUFFIXES ?? "")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+/** For CORS: exact allowlist plus optional suffix allowlist */
+export function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (clientOrigins.includes(origin)) return true;
+  try {
+    const { protocol, hostname } = new URL(origin);
+    const host = hostname.toLowerCase();
+    if (protocol !== "https:" && protocol !== "http:") return false;
+    for (const suffix of clientOriginSuffixes) {
+      const s = suffix.toLowerCase();
+      if (!s) continue;
+      if (host === s || host.endsWith(`.${s}`)) return true;
+    }
+  } catch {
+    /* invalid URL */
+  }
+  return false;
+}

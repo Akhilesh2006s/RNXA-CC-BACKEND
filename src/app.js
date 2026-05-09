@@ -4,7 +4,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { clientOrigins } from "./config/env.js";
+import { isOriginAllowed } from "./config/env.js";
 import { UPLOAD_DIR } from "./middleware/document-upload.middleware.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware.js";
 import { apiRouter } from "./routes/index.js";
@@ -18,8 +18,7 @@ app.use(helmet());
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin) return callback(null, true);
-      if (clientOrigins.includes(origin)) return callback(null, true);
+      if (isOriginAllowed(origin)) return callback(null, true);
       return callback(null, false);
     },
     credentials: true

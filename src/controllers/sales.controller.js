@@ -13,6 +13,10 @@ import {
   updateLeadStageSchema,
   addClientProjectSchema,
   updateClientSchema,
+  convertLeadBodySchema,
+  updateClientProjectSchema,
+  addProjectUpdateSchema,
+  updateProjectUpdateSchema,
   PIPELINE_STAGES
 } from "../validators/sales.js";
 
@@ -173,12 +177,21 @@ export async function updateLeadStage(req, res) {
 }
 
 export async function convertLead(req, res) {
+  const bodyParsed = convertLeadBodySchema.safeParse(req.body ?? {});
+  if (!bodyParsed.success) throw new ApiError(400, "Invalid body", bodyParsed.error.flatten());
+
+  const force = Boolean(bodyParsed.data.force);
+
   const lead = await LeadModel.findOne({ _id: req.params.leadId, deletedAt: null });
   if (!lead) throw new ApiError(404, "Lead not found");
   if (lead.convertedClientId) throw new ApiError(400, "Lead already converted");
 
-  if (lead.stage !== "Negotiation") {
-    throw new ApiError(400, "Move lead to Negotiation before converting to client");
+  if (lead.stage === "Lost") {
+    throw new ApiError(400, "Cannot convert a lost lead");
+  }
+
+  if (!force && lead.stage !== "Negotiation") {
+    throw new ApiError(400, "Move lead to Negotiation before converting, or use manual convert");
   }
 
   const dealValue = typeof lead.estimatedDealValue === "number" ? lead.estimatedDealValue : 0;
@@ -337,6 +350,167 @@ export async function addClientProject(req, res) {
   });
 
   return res.status(201).json(apiSuccess(client, "Project added"));
+}
+
+function requireClientAndProject(clientId, projectId) {
+  if (!mongoose.isValidObjectId(clientId)) throw new ApiError(400, "Invalid client id");
+  if (!mongoose.isValidObjectId(projectId)) throw new ApiError(400, "Invalid project id");
+}
+
+export async function updateClientProject(req, res) {
+  const parsed = updateClientProjectSchema.safeParse(req.body);
+  if (!parsed.success) throw new ApiError(400, "Invalid project payload", parsed.error.flatten());
+
+  requireClientAndProject(req.params.clientId, req.params.projectId);
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const project = client.projects.id(req.params.projectId);
+  if (!project) throw new ApiError(404, "Project not found");
+
+  const before = client.toObject();
+  const d = parsed.data;
+  if (d.name !== undefined) project.name = d.name;
+  if (d.status !== undefined) project.status = d.status;
+  if (d.description !== undefined) project.description = d.description ?? "";
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.project.update",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { projectId: req.params.projectId }
+  });
+
+  return res.json(apiSuccess(client, "Project updated"));
+}
+
+export async function deleteClientProject(req, res) {
+  requireClientAndProject(req.params.clientId, req.params.projectId);
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const project = client.projects.id(req.params.projectId);
+  if (!project) throw new ApiError(404, "Project not found");
+
+  const before = client.toObject();
+  project.deleteOne();
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.project.delete",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { projectId: req.params.projectId }
+  });
+
+  return res.json(apiSuccess(client, "Project removed"));
+}
+
+export async function addProjectUpdate(req, res) {
+  const parsed = addProjectUpdateSchema.safeParse(req.body);
+  if (!parsed.success) throw new ApiError(400, "Invalid update payload", parsed.error.flatten());
+
+  requireClientAndProject(req.params.clientId, req.params.projectId);
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const project = client.projects.id(req.params.projectId);
+  if (!project) throw new ApiError(404, "Project not found");
+
+  const before = client.toObject();
+  if (!project.updates) project.updates = [];
+  project.updates.push({
+    note: parsed.data.note,
+    reportDate: parsed.data.reportDate ? new Date(parsed.data.reportDate) : new Date()
+  });
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.project.update.add",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { projectId: req.params.projectId }
+  });
+
+  return res.status(201).json(apiSuccess(client, "Update logged"));
+}
+
+export async function updateProjectUpdateEntry(req, res) {
+  const parsed = updateProjectUpdateSchema.safeParse(req.body);
+  if (!parsed.success) throw new ApiError(400, "Invalid update payload", parsed.error.flatten());
+
+  requireClientAndProject(req.params.clientId, req.params.projectId);
+  if (!mongoose.isValidObjectId(req.params.updateId)) throw new ApiError(400, "Invalid update id");
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const project = client.projects.id(req.params.projectId);
+  if (!project) throw new ApiError(404, "Project not found");
+
+  const entry = project.updates.id(req.params.updateId);
+  if (!entry) throw new ApiError(404, "Update not found");
+
+  const before = client.toObject();
+  const d = parsed.data;
+  if (d.note !== undefined) entry.note = d.note;
+  if (d.reportDate !== undefined) entry.reportDate = new Date(d.reportDate);
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.project.update.edit",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { projectId: req.params.projectId, updateId: req.params.updateId }
+  });
+
+  return res.json(apiSuccess(client, "Update saved"));
+}
+
+export async function deleteProjectUpdateEntry(req, res) {
+  requireClientAndProject(req.params.clientId, req.params.projectId);
+  if (!mongoose.isValidObjectId(req.params.updateId)) throw new ApiError(400, "Invalid update id");
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const project = client.projects.id(req.params.projectId);
+  if (!project) throw new ApiError(404, "Project not found");
+
+  const entry = project.updates.id(req.params.updateId);
+  if (!entry) throw new ApiError(404, "Update not found");
+
+  const before = client.toObject();
+  entry.deleteOne();
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.project.update.delete",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { projectId: req.params.projectId, updateId: req.params.updateId }
+  });
+
+  return res.json(apiSuccess(client, "Update removed"));
 }
 
 export async function getSalesAnalytics(_req, res) {

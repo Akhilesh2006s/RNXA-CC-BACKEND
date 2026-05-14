@@ -67,3 +67,23 @@ export const addClientProjectSchema = z.object({
   status: z.enum(["Planning", "Active", "On Hold", "Completed"]).optional(),
   description: z.string().optional()
 });
+
+export const convertLeadBodySchema = z.object({
+  force: z.boolean().optional()
+});
+
+export const updateClientProjectSchema = z.object({
+  name: z.string().min(1).optional(),
+  status: z.enum(["Planning", "Active", "On Hold", "Completed"]).optional(),
+  description: z.string().optional()
+});
+
+export const addProjectUpdateSchema = z.object({
+  note: z.string().min(1),
+  reportDate: z.string().optional()
+});
+
+export const updateProjectUpdateSchema = z.object({
+  note: z.string().min(1).optional(),
+  reportDate: z.string().optional()
+});

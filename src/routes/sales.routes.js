@@ -1,9 +1,12 @@
 import { Router } from "express";
 import {
   addClientProject,
+  addProjectUpdate,
   convertLead,
   createLead,
+  deleteClientProject,
   deleteLead,
+  deleteProjectUpdateEntry,
   getClient,
   getClientHub,
   getLead,
@@ -11,8 +14,10 @@ import {
   listClients,
   listLeads,
   updateClient,
+  updateClientProject,
   updateLead,
-  updateLeadStage
+  updateLeadStage,
+  updateProjectUpdateEntry
 } from "../controllers/sales.controller.js";
 import { requireAuth, requireRoles } from "../middleware/auth.middleware.js";
 
@@ -38,3 +43,28 @@ salesRouter.get("/clients/:clientId/hub", requireRoles(...salesReadRoles), getCl
 salesRouter.get("/clients/:clientId", requireRoles(...salesReadRoles), getClient);
 salesRouter.patch("/clients/:clientId", requireRoles(...salesWriteRoles), updateClient);
 salesRouter.post("/clients/:clientId/projects", requireRoles(...salesWriteRoles), addClientProject);
+salesRouter.patch(
+  "/clients/:clientId/projects/:projectId",
+  requireRoles(...salesWriteRoles),
+  updateClientProject
+);
+salesRouter.delete(
+  "/clients/:clientId/projects/:projectId",
+  requireRoles(...salesWriteRoles),
+  deleteClientProject
+);
+salesRouter.post(
+  "/clients/:clientId/projects/:projectId/updates",
+  requireRoles(...salesWriteRoles),
+  addProjectUpdate
+);
+salesRouter.patch(
+  "/clients/:clientId/projects/:projectId/updates/:updateId",
+  requireRoles(...salesWriteRoles),
+  updateProjectUpdateEntry
+);
+salesRouter.delete(
+  "/clients/:clientId/projects/:projectId/updates/:updateId",
+  requireRoles(...salesWriteRoles),
+  deleteProjectUpdateEntry
+);

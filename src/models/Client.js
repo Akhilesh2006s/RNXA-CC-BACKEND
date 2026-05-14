@@ -8,6 +8,14 @@ const communicationLogSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const projectUpdateSchema = new mongoose.Schema(
+  {
+    note: { type: String, required: true, trim: true },
+    reportDate: { type: Date, default: () => new Date() }
+  },
+  { timestamps: true }
+);
+
 const clientProjectSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -16,7 +24,8 @@ const clientProjectSchema = new mongoose.Schema(
       enum: ["Planning", "Active", "On Hold", "Completed"],
       default: "Active"
     },
-    description: { type: String, default: "" }
+    description: { type: String, default: "" },
+    updates: { type: [projectUpdateSchema], default: [] }
   },
   { timestamps: true }
 );

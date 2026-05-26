@@ -118,12 +118,16 @@ export async function login(req, res) {
 export async function logout(req, res) {
   const rt = req.cookies.refreshToken;
   if (rt) {
-    const payload = verifyRefreshToken(rt);
-    await UserModel.findByIdAndUpdate(payload.sub, { refreshTokenHash: null });
+    try {
+      const payload = verifyRefreshToken(rt);
+      await UserModel.findByIdAndUpdate(payload.sub, { refreshTokenHash: null });
+    } catch {
+      // Expired/invalid refresh token — still clear browser cookies below
+    }
   }
   const ck = authCookieBase();
-  res.clearCookie("accessToken", { path: ck.path, sameSite: ck.sameSite, secure: ck.secure });
-  res.clearCookie("refreshToken", { path: ck.path, sameSite: ck.sameSite, secure: ck.secure });
+  res.clearCookie("accessToken", ck);
+  res.clearCookie("refreshToken", ck);
   return res.json(apiSuccess(null, "Logout successful"));
 }
 

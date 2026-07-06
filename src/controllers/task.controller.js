@@ -6,11 +6,18 @@ import { paginateQuery } from "../utils/pagination.js";
 import { logActivity } from "../services/activity-log.service.js";
 import { notifyUsers, stakeholderIds } from "../services/notification.service.js";
 import { ApiError } from "../utils/ApiError.js";
+import {
+  allSubtasksDone,
+  isAllowedTaskTransition,
+  openSubtaskCount
+} from "../lib/task-workflow.js";
 
 const createTaskSchema = z.object({
   title: z.string().min(2),
   description: z.string().optional(),
-  status: z.enum(["Pending", "In Progress", "Blocked", "Completed", "Overdue", "Archived"]).optional(),
+  status: z
+    .enum(["Pending", "In Progress", "In Review", "Blocked", "Completed", "Overdue", "Archived"])
+    .optional(),
   priority: z.enum(["Low", "Medium", "High", "Critical"]).optional(),
   type: z.enum(["One-time", "Daily", "Weekly", "Monthly", "Recurring"]).optional(),
   dueDate: z.string().optional(),
@@ -21,7 +28,16 @@ const createTaskSchema = z.object({
 const updateTaskSchema = createTaskSchema.partial();
 
 const updateStatusSchema = z.object({
-  status: z.enum(["Pending", "In Progress", "Blocked", "Completed", "Overdue", "Archived"])
+  status: z.enum([
+    "Pending",
+    "In Progress",
+    "In Review",
+    "Blocked",
+    "Completed",
+    "Overdue",
+    "Archived"
+  ]),
+  force: z.boolean().optional()
 });
 
 const createCommentSchema = z.object({
@@ -138,8 +154,26 @@ export async function updateTaskStatus(req, res) {
   const task = await TaskModel.findById(req.params.taskId);
   if (!task) throw new ApiError(404, "Task not found");
 
+  const nextStatus = parsed.data.status;
+  const force = Boolean(parsed.data.force);
+
+  if (!isAllowedTaskTransition(task.status, nextStatus)) {
+    throw new ApiError(
+      400,
+      `Cannot move from "${task.status}" to "${nextStatus}". Follow the workflow: Pending → In Progress → In Review → Completed.`
+    );
+  }
+
+  if (nextStatus === "Completed" && !allSubtasksDone(task.subtasks) && !force) {
+    const open = openSubtaskCount(task.subtasks);
+    throw new ApiError(
+      400,
+      `Complete all checklist steps first (${open} remaining), or confirm with force: true.`
+    );
+  }
+
   const before = task.toObject();
-  task.status = parsed.data.status;
+  task.status = nextStatus;
   await task.save();
 
   await logActivity({

@@ -71,6 +71,11 @@ export async function createInvoice(req, res) {
   applyInvoiceStatus(inv);
   await inv.save();
 
+  if (!client.invoiceIds.some((id) => String(id) === String(inv._id))) {
+    client.invoiceIds.push(inv._id);
+    await client.save();
+  }
+
   await logActivity({
     actorUserId: req.user.id,
     action: "finance.invoice.create",
@@ -95,7 +100,7 @@ export async function recordInvoicePayment(req, res) {
 
   await inv.save();
 
-  await PaymentModel.create({
+  const payment = await PaymentModel.create({
     invoiceId: inv._id,
     amount: parsed.data.amount,
     status: "Paid",
@@ -103,6 +108,16 @@ export async function recordInvoicePayment(req, res) {
     paidAt: new Date(),
     notes: parsed.data.notes ?? ""
   });
+
+  const client = await ClientModel.findById(inv.clientId);
+  if (client) {
+    if (!client.paymentIds.some((id) => String(id) === String(payment._id))) {
+      client.paymentIds.push(payment._id);
+    }
+    if (inv.paidAmount >= inv.total && inv.total > 0) client.paymentStatus = "Paid";
+    else if (inv.paidAmount > 0) client.paymentStatus = "Pending";
+    await client.save();
+  }
 
   await logActivity({
     actorUserId: req.user.id,

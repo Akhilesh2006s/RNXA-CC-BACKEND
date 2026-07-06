@@ -20,7 +20,9 @@ export async function getDashboardKpis(_req, res) {
     totalExpensesAgg,
     revenueThisMonthAgg
   ] = await Promise.all([
-    TaskModel.countDocuments({ status: { $in: ["Pending", "In Progress", "Blocked"] } }),
+    TaskModel.countDocuments({
+      status: { $in: ["Pending", "In Progress", "In Review", "Blocked"] }
+    }),
     TaskModel.countDocuments({ status: "Overdue" }),
     PaymentModel.aggregate([{ $match: { status: "Pending" } }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
     EmployeeModel.countDocuments(),

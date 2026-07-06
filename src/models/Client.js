@@ -22,10 +22,37 @@ const clientProjectSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["Planning", "Active", "On Hold", "Completed"],
-      default: "Active"
+      default: "Planning"
     },
     description: { type: String, default: "" },
+    /** What we're building / delivering for the client */
+    scope: { type: String, default: "" },
+    startDate: { type: Date, default: null },
+    targetEndDate: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    /** Project manager — synced to Action Management task linking */
+    managerEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null },
+    managerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    managerName: { type: String, default: "" },
     updates: { type: [projectUpdateSchema], default: [] }
+  },
+  { timestamps: true }
+);
+
+const clientCostLogSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    category: {
+      type: String,
+      enum: ["Labor", "Materials", "Software", "Hosting", "Travel", "Other"],
+      default: "Other"
+    },
+    amount: { type: Number, required: true },
+    date: { type: Date, default: () => new Date() },
+    linkedProject: { type: String, default: "" },
+    billable: { type: Boolean, default: true },
+    notes: { type: String, default: "" },
+    visibleToClient: { type: Boolean, default: true }
   },
   { timestamps: true }
 );
@@ -46,6 +73,7 @@ const clientSchema = new mongoose.Schema(
     invoiceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Invoice" }],
     paymentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Payment" }],
     projects: [clientProjectSchema],
+    costLogs: { type: [clientCostLogSchema], default: [] },
     projectSummary: { type: String, default: "" },
     supportStatus: { type: String, enum: ["Healthy", "At Risk"], default: "Healthy" },
     communicationLogs: [communicationLogSchema]

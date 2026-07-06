@@ -2,15 +2,19 @@ import { Router } from "express";
 import {
   addClientProject,
   addProjectUpdate,
+  addClientCost,
   convertLead,
   createLead,
+  deleteClientCost,
   deleteClientProject,
   deleteLead,
   deleteProjectUpdateEntry,
   getClient,
+  getClientFinance,
   getClientHub,
   getLead,
   getSalesAnalytics,
+  listClientProjects,
   listClients,
   listLeads,
   updateClient,
@@ -40,8 +44,12 @@ salesRouter.post("/leads/:leadId/convert", requireRoles(...salesWriteRoles), con
 
 salesRouter.get("/clients", listClients);
 salesRouter.get("/clients/:clientId/hub", requireRoles(...salesReadRoles), getClientHub);
+salesRouter.get("/clients/:clientId/projects", requireRoles(...salesReadRoles), listClientProjects);
+salesRouter.get("/clients/:clientId/finance", requireRoles(...salesReadRoles), getClientFinance);
 salesRouter.get("/clients/:clientId", requireRoles(...salesReadRoles), getClient);
 salesRouter.patch("/clients/:clientId", requireRoles(...salesWriteRoles), updateClient);
+salesRouter.post("/clients/:clientId/costs", requireRoles(...salesWriteRoles), addClientCost);
+salesRouter.delete("/clients/:clientId/costs/:costId", requireRoles(...salesWriteRoles), deleteClientCost);
 salesRouter.post("/clients/:clientId/projects", requireRoles(...salesWriteRoles), addClientProject);
 salesRouter.patch(
   "/clients/:clientId/projects/:projectId",

@@ -2,7 +2,10 @@ import mongoose from "mongoose";
 import { LeadModel } from "../models/Lead.js";
 import { ClientModel } from "../models/Client.js";
 import { TaskModel } from "../models/Task.js";
+import { InvoiceModel } from "../models/Invoice.js";
+import { PaymentModel } from "../models/Payment.js";
 import { UserModel } from "../models/User.js";
+import { EmployeeModel } from "../models/Employee.js";
 import { apiSuccess } from "../utils/apiResponse.js";
 import { paginateQuery } from "../utils/pagination.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -17,7 +20,10 @@ import {
   updateClientProjectSchema,
   addProjectUpdateSchema,
   updateProjectUpdateSchema,
-  PIPELINE_STAGES
+  addClientCostSchema,
+  PIPELINE_STAGES,
+  CONVERT_ALLOWED_STAGES,
+  isAllowedStageTransition
 } from "../validators/sales.js";
 
 function taskIsDone(doc) {
@@ -158,6 +164,14 @@ export async function updateLeadStage(req, res) {
   if (lead.convertedClientId) throw new ApiError(400, "Lead already converted to client");
   if (lead.stage === "Won") throw new ApiError(400, "Closed won leads cannot move stages");
 
+  const nextStage = parsed.data.stage;
+  if (!isAllowedStageTransition(lead.stage, nextStage)) {
+    throw new ApiError(
+      400,
+      `Invalid stage transition from "${lead.stage}" to "${nextStage}". Advance one step at a time, or mark as Lost.`
+    );
+  }
+
   const before = lead.toObject();
   lead.stage = parsed.data.stage;
   lead.lostReason =
@@ -180,8 +194,6 @@ export async function convertLead(req, res) {
   const bodyParsed = convertLeadBodySchema.safeParse(req.body ?? {});
   if (!bodyParsed.success) throw new ApiError(400, "Invalid body", bodyParsed.error.flatten());
 
-  const force = Boolean(bodyParsed.data.force);
-
   const lead = await LeadModel.findOne({ _id: req.params.leadId, deletedAt: null });
   if (!lead) throw new ApiError(404, "Lead not found");
   if (lead.convertedClientId) throw new ApiError(400, "Lead already converted");
@@ -190,8 +202,11 @@ export async function convertLead(req, res) {
     throw new ApiError(400, "Cannot convert a lost lead");
   }
 
-  if (!force && lead.stage !== "Negotiation") {
-    throw new ApiError(400, "Move lead to Negotiation before converting, or use manual convert");
+  if (!CONVERT_ALLOWED_STAGES.has(lead.stage)) {
+    throw new ApiError(
+      400,
+      "Convert to client is only allowed from Proposal Sent or Negotiation"
+    );
   }
 
   const dealValue = typeof lead.estimatedDealValue === "number" ? lead.estimatedDealValue : 0;
@@ -206,6 +221,15 @@ export async function convertLead(req, res) {
     projectSummary: `Converted from CRM lead`,
     communicationLogs: [
       { message: lead.notes ? `Imported notes:\n${lead.notes}` : "Converted via CRM workflow" }
+    ],
+    projects: [
+      {
+        name: `${lead.company} — Main project`,
+        status: "Planning",
+        description: "Auto-created when lead converted to client",
+        scope: lead.notes?.trim() || "",
+        startDate: new Date()
+      }
     ]
   });
 
@@ -240,6 +264,50 @@ export async function getClient(req, res) {
   return res.json(apiSuccess(client));
 }
 
+async function applyProjectManager(project, managerEmployeeId) {
+  if (!managerEmployeeId) {
+    project.managerEmployeeId = null;
+    project.managerId = null;
+    project.managerName = "";
+    return;
+  }
+  if (!mongoose.isValidObjectId(managerEmployeeId)) {
+    throw new ApiError(400, "Invalid manager employee id");
+  }
+  const emp = await EmployeeModel.findById(managerEmployeeId).lean();
+  if (!emp) throw new ApiError(404, "Manager employee not found");
+  project.managerEmployeeId = emp._id;
+  project.managerId = emp.userId ?? null;
+  project.managerName = emp.name ?? "";
+}
+
+export async function listClientProjects(req, res) {
+  if (!mongoose.isValidObjectId(req.params.clientId))
+    throw new ApiError(400, "Invalid client id");
+
+  const client = await ClientModel.findById(req.params.clientId).lean();
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const items = (client.projects ?? []).map((p) => ({
+    _id: p._id,
+    name: p.name,
+    status: p.status,
+    managerName: p.managerName ?? "",
+    managerEmployeeId: p.managerEmployeeId ?? null,
+    managerId: p.managerId ?? null,
+    clientId: client._id,
+    clientCompany: client.company
+  }));
+
+  return res.json(
+    apiSuccess({
+      clientId: client._id,
+      company: client.company,
+      items
+    })
+  );
+}
+
 export async function getClientHub(req, res) {
   if (!mongoose.isValidObjectId(req.params.clientId))
     throw new ApiError(400, "Invalid client id");
@@ -248,9 +316,10 @@ export async function getClientHub(req, res) {
 
   const cid = client._id;
   const tasks = await TaskModel.find({ linkedClientId: cid })
-    .sort({ updatedAt: -1 })
+    .sort({ dueDate: 1, updatedAt: -1 })
     .populate("assignees", "name email")
     .populate("createdBy", "name email")
+    .populate("comments.userId", "name email")
     .lean();
 
   const workByProject = {};
@@ -287,6 +356,121 @@ export async function getClientHub(req, res) {
       projects
     })
   );
+}
+
+export async function getClientFinance(req, res) {
+  if (!mongoose.isValidObjectId(req.params.clientId))
+    throw new ApiError(400, "Invalid client id");
+
+  const client = await ClientModel.findById(req.params.clientId).lean();
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const cid = client._id;
+  const invoices = await InvoiceModel.find({ clientId: cid }).sort({ issueDate: -1 }).lean();
+  const invoiceIds = invoices.map((i) => i._id);
+  const payments =
+    invoiceIds.length > 0
+      ? await PaymentModel.find({ invoiceId: { $in: invoiceIds } })
+          .sort({ paidAt: -1, createdAt: -1 })
+          .lean()
+      : [];
+
+  const costLogs = (client.costLogs ?? [])
+    .filter((c) => c.visibleToClient !== false)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const totalInvoiced = invoices.reduce((sum, inv) => sum + (inv.total ?? 0), 0);
+  const totalPaid = invoices.reduce((sum, inv) => sum + (inv.paidAmount ?? 0), 0);
+  const outstanding = Math.max(totalInvoiced - totalPaid, 0);
+  const totalCosts = costLogs.reduce((sum, row) => sum + (row.amount ?? 0), 0);
+
+  const paymentsWithInvoice = payments.map((p) => {
+    const inv = invoices.find((i) => String(i._id) === String(p.invoiceId));
+    return {
+      ...p,
+      invoiceNumber: inv?.invoiceNumber ?? null
+    };
+  });
+
+  return res.json(
+    apiSuccess({
+      summary: {
+        dealValue: client.dealValue ?? 0,
+        totalInvoiced,
+        totalPaid,
+        outstanding,
+        totalCosts,
+        paymentStatus: client.paymentStatus ?? "Pending"
+      },
+      invoices,
+      payments: paymentsWithInvoice,
+      costLogs
+    })
+  );
+}
+
+export async function addClientCost(req, res) {
+  const parsed = addClientCostSchema.safeParse(req.body);
+  if (!parsed.success) throw new ApiError(400, "Invalid cost payload", parsed.error.flatten());
+
+  if (!mongoose.isValidObjectId(req.params.clientId))
+    throw new ApiError(400, "Invalid client id");
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const before = client.toObject();
+  client.costLogs.push({
+    title: parsed.data.title,
+    category: parsed.data.category ?? "Other",
+    amount: parsed.data.amount,
+    date: parsed.data.date ? new Date(parsed.data.date) : new Date(),
+    linkedProject: parsed.data.linkedProject ?? "",
+    billable: parsed.data.billable ?? true,
+    notes: parsed.data.notes ?? "",
+    visibleToClient: parsed.data.visibleToClient ?? true
+  });
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.cost.add",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { title: parsed.data.title, amount: parsed.data.amount }
+  });
+
+  return res.status(201).json(apiSuccess(client, "Cost logged for client"));
+}
+
+export async function deleteClientCost(req, res) {
+  if (!mongoose.isValidObjectId(req.params.clientId))
+    throw new ApiError(400, "Invalid client id");
+  if (!mongoose.isValidObjectId(req.params.costId)) throw new ApiError(400, "Invalid cost id");
+
+  const client = await ClientModel.findById(req.params.clientId);
+  if (!client) throw new ApiError(404, "Client not found");
+
+  const entry = client.costLogs.id(req.params.costId);
+  if (!entry) throw new ApiError(404, "Cost entry not found");
+
+  const before = client.toObject();
+  entry.deleteOne();
+  await client.save();
+
+  await logActivity({
+    actorUserId: req.user.id,
+    action: "sales.client.cost.delete",
+    entityType: "Client",
+    entityId: client._id.toString(),
+    before,
+    after: client.toObject(),
+    metadata: { costId: req.params.costId }
+  });
+
+  return res.json(apiSuccess(client, "Cost entry removed"));
 }
 
 export async function updateClient(req, res) {
@@ -332,11 +516,18 @@ export async function addClientProject(req, res) {
   if (!client) throw new ApiError(404, "Client not found");
 
   const before = client.toObject();
-  client.projects.push({
+  const project = {
     name: parsed.data.name,
-    status: parsed.data.status ?? "Active",
-    description: parsed.data.description ?? ""
-  });
+    status: parsed.data.status ?? "Planning",
+    description: parsed.data.description ?? "",
+    scope: parsed.data.scope ?? "",
+    startDate: parsed.data.startDate ? new Date(parsed.data.startDate) : new Date(),
+    targetEndDate: parsed.data.targetEndDate ? new Date(parsed.data.targetEndDate) : null
+  };
+  if (parsed.data.managerEmployeeId) {
+    await applyProjectManager(project, parsed.data.managerEmployeeId);
+  }
+  client.projects.push(project);
   await client.save();
 
   await logActivity({
@@ -372,8 +563,29 @@ export async function updateClientProject(req, res) {
   const before = client.toObject();
   const d = parsed.data;
   if (d.name !== undefined) project.name = d.name;
-  if (d.status !== undefined) project.status = d.status;
+  if (d.status !== undefined) {
+    project.status = d.status;
+    if (d.status === "Completed" && !project.completedAt) {
+      project.completedAt = new Date();
+    }
+    if (d.status !== "Completed" && d.completedAt === undefined) {
+      project.completedAt = null;
+    }
+  }
   if (d.description !== undefined) project.description = d.description ?? "";
+  if (d.scope !== undefined) project.scope = d.scope ?? "";
+  if (d.startDate !== undefined) {
+    project.startDate = d.startDate ? new Date(d.startDate) : null;
+  }
+  if (d.targetEndDate !== undefined) {
+    project.targetEndDate = d.targetEndDate ? new Date(d.targetEndDate) : null;
+  }
+  if (d.completedAt !== undefined) {
+    project.completedAt = d.completedAt ? new Date(d.completedAt) : null;
+  }
+  if (d.managerEmployeeId !== undefined) {
+    await applyProjectManager(project, d.managerEmployeeId || null);
+  }
   await client.save();
 
   await logActivity({
